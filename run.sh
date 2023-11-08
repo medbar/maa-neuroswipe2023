@@ -7,7 +7,7 @@ set -e
 
 . ./cmd.sh # cmd import 
 
-stage=0
+stage=4
 
 train_nj=128
 test_nj=4
@@ -111,25 +111,31 @@ if [ $stage -le 3 ] ; then
     done
 fi
 
+
 if [ $stage -le 4 ] ; then 
     echo "$0: Stage 4: Run sentencepiece train"
-    mkdir -p data/tokenizer
-    #cat  \
-    #    ./data/voc.txt \
-    #    ./data/valid.ref \
-    #    <(awk '{print $2}' data_feats/train/text ) \
-    #    <(awk '{print $2}' data_feats/accepted/text ) \
-    #    <(awk '{print $2}' data_feats/suggestion_accepted/text ) > data/tokenizer/train_tokenizer
-    #spm_train \
-    #    --input=data/tokenizer/train_tokenizer \
-    #    --model_prefix=data/tokenizer/bpe.500 \
-    #    --vocab_size=500 \
-    #    --character_coverage=1.0 \
-    #    --model_type=bpe
-
-    #paste ./data/voc.txt <(spm_encode --model=data/tokenizer/bpe.500 \
-    #    --output_format=piece < ./data/voc.txt ) > data/tokenizer/voc.piece
+    exp_dir=exp/bpe500
+    mkdir -p $exp_dir
+    python maatool/cli/tokenize_text.py \
+        --text_out_dir $exp_dir \
+        --vocab_size 500 \
+        $exp_dir/model  \
+        ./data/voc.txt \
+        ark:data_feats/valid/text \
+        ark:data_feats/train/text \
+        ark:data_feats/accepted/text \
+        ark:data_feats/suggestion_accepted/text 
 fi
 
 
+if [ $stage -le 5 ] ; then 
+    echo "$0: Stage 5: Train model"
+    exit 1 
+fi
+
+
+if [ $stage -le 5 ] ; then 
+    echo "$0: Stage 5: Decoding"
+    exit 1
+fi
 

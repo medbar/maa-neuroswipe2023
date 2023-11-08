@@ -44,16 +44,17 @@ class FeatsIterableDataset(IterableDataset):
         else:
             self.utt2target = None
 
-    def __len__(self):
+    @property
+    def total(self):
         return len(self.utt2target)
 
     def items(self):
         #rspecs = self.feats_rspecifiers[info.id: len(self.feats_rspecifiers): info.num_workers]
         rspecs = self.feats_rspecifiers[get_uniq_slice()]
         if self.shuffle:
-            rspecs = np.random.permutation(rspecs)
+            rspecs = np.random.shuffle(rspecs)
         for rspec in rspecs:
-            logging.info(f'Processing {rspec}')
+            logging.debug(f'Processing {rspec}')
             with ReadHelper(rspec) as f:
                 for uid, feats in f:
                     if self.utt2target is not None:
@@ -66,7 +67,7 @@ class FeatsIterableDataset(IterableDataset):
                         targets_len = None
 
                     yield {'uid': uid,
-                           'feats': torch.as_tensor(feats, dtype=torch.float32),
+                           'feats': torch.from_numpy(feats),
                            'feats_len': feats.shape[0],
                            'targets': targets,
                            'targets_len': targets_len,
@@ -79,7 +80,6 @@ class FeatsIterableDataset(IterableDataset):
 
     def collate(self, batch):
         collated_batch = dict()
-        collated_batch['uids'] = [e['uid'] for e in batch]
         collated_batch['feats'] = torch.nn.utils.rnn.pad_sequence([e['feats'] for e in batch],
                                                 batch_first=False,
                                                 padding_value=1.0)

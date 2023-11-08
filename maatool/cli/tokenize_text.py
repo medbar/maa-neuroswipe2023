@@ -50,7 +50,7 @@ def spm_train(model_prefix, text_fnames, vocab_size=500, model_type='bpe', text_
     if text_out_dir is not None:
         Path(text_out_dir).mkdir(parents=True, exist_ok=True)
         sp = spm.SentencePieceProcessor(model_file=f'{model_prefix}.model')
-        for fname in text_fnames:
+        for fname in tqdm(text_fnames):
             lines, uids = read_ark_text_file(fname) if fname.startswith('ark:') else read_text_file(fname)
             encoded = [sp.encode(line, out_type="immutable_proto") for line in lines ]
 #            print(encoded)

@@ -33,10 +33,12 @@ def get_uniq_slice():
 
 
 class FeatsIterableDataset(IterableDataset):
-    def __init__(self, feats_rspecifiers: List[str], targets_rspecifier=None, shuffle=False):
+    def __init__(self, feats_rspecifiers: List[str], targets_rspecifier=None, shuffle=False, bos_id=None, eos_id=None):
         self.feats_rspecifiers = feats_rspecifiers
         self.targets_rspecifier = targets_rspecifier
         self.shuffle = shuffle
+        self.bos_id = bos_id
+        self.eos_id = eos_id
         if targets_rspecifier is not None:
             logging.info(f"Loading targets from {targets_rspecifier}")
             with ReadHelper(self.targets_rspecifier) as f:
