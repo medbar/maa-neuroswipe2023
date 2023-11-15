@@ -7,7 +7,7 @@ set -e
 
 . ./cmd.sh # cmd import 
 
-stage=4
+stage=6
 
 train_nj=128
 test_nj=4
@@ -17,7 +17,6 @@ help_message="$0 [options] #TODO"
 
 . ./utils/parse_options.sh
 
-#TODO use utils/require_argument_all.sh, utils/require_argument_any.sh, ... to check the parameters
 
 if [ $stage -le 0 ] ; then
     echo "$0: Stage 0: Split data"
@@ -129,13 +128,35 @@ fi
 
 
 if [ $stage -le 5 ] ; then 
-    echo "$0: Stage 5: Train model"
-    exit 1 
+    echo "$0: Stage 5: Get grid names"
+    python maatool/cli/keyboard_from_json.py \
+        data/valid.jsonl \
+        data_feats/valid/grid_name
+
+    python maatool/cli/keyboard_from_json.py \
+        data/test.jsonl \
+        data_feats/test/grid_name
+
+     $cmd JOB=1:$train_nj data_feats/train/log/grid_name.JOB.log \
+        python ./maatool/cli/keyboard_from_json.py \
+        data/split$train_nj/train.JOB.json \
+        data_feats/train/grid_name.JOB
+    cat data_feats/train/grid_name.* | sort -n > data_feats/train/grid_name
+
+    
 fi
 
 
-if [ $stage -le 5 ] ; then 
-    echo "$0: Stage 5: Decoding"
-    exit 1
+if [ $stage -le 6 ] ; then 
+    echo "$0: Stage 6: Grid names for additional data"
+    for n in accepted suggestion_accepted ; do 
+        $cmd JOB=1:$train_nj data_feats/$n/log/grid_name.JOB.log \
+            python maatool/cli/keyboard_from_json.py \
+            data/split$train_nj/$n.JOB.json \
+            data_feats/$n/grid_name.JOB
+
+        cat data_feats/$n/grid_name.* | sort -n > data_feats/$n/grid_name
+    done
 fi
 
+exit

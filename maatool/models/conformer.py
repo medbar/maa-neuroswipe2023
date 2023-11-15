@@ -1,6 +1,7 @@
 import torch
 import math
 from torch import nn
+from torchaudio.models import Conformer
 
 
 class PositionalEncoding(nn.Module):
@@ -33,8 +34,8 @@ class PositionalEncoding(nn.Module):
 
 
 
-class TransformerWithSinPos(nn.Module):
-    def __init__(self, feats_dim, num_tokens, d_model=512, num_encoder_layers=6, num_decoder_layers=6, dim_feedforward=2048, dropout=0.1, nhead=8, max_len=400):
+class ConformerWithSinPos(nn.Module):
+    def __init__(self, feats_dim, num_tokens, d_model=512, num_encoder_layers=6, num_decoder_layers=6, dim_feedforward=2048, dropout=0.1, nhead=8, max_len=400, max_out_len=30):
         super().__init__()
         self.feats_dim = feats_dim
         self.num_tokens = num_tokens
@@ -43,18 +44,23 @@ class TransformerWithSinPos(nn.Module):
         self.input_ff = nn.Linear(feats_dim, d_model)
         self.tgt_embedding = nn.Embedding(num_tokens, d_model)
         self.positional_encoding = PositionalEncoding(dim_model=d_model, dropout_p=dropout, max_len=max_len)
+        #self.decoder_pos_encoding = nn.Embedding(max_out_len, d_model)
         #layer = torch.nn.TransformerEncoderLayer(d_model=dim,
         #                                         nhead=nhead,
         #                                         dim_feedforward=ff_dim,
         #                                         dropout=dropout,
         #                                         batch_first=False)
-        self.transformer = torch.nn.Transformer(d_model=d_model,
-                                                nhead=nhead,
-                                                num_encoder_layers=num_encoder_layers,
-                                                num_decoder_layers=num_decoder_layers,
-                                                dim_feedforward=dim_feedforward,
-                                                dropout=dropout,
-                                                batch_first=False)
+        self.encoder = Conformer(input_dim=d_model,
+                                 num_heads=nhead,
+                                 ffn_dim=dim_feedforward,
+                                 num_layers=num_encoder_layers,
+                                 depthwise_conv_kernel_size=31,
+                                 dropout=dropout)
+        decoder_layer = nn.TransformerDecoderLayer(d_model=d_model,
+                                                   nhead=nhead,
+                                                  dim_feedforward=dim_feedforward,
+                                                  dropout=dropout)
+        self.decoder = torch.nn.TransformerDecoder(decoder_layer, num_layers=num_decoder_layers)
         self.head = nn.Linear(d_model, num_tokens)
         #torch.nn.Transformer(encoder_layer=layer, num_layers=num_layers)
 
@@ -65,41 +71,34 @@ class TransformerWithSinPos(nn.Module):
         src_key_padding_mask - (Batch, Time)
         tgt_key_padding_mask - (Batch, Time)
         """
-        pass
+        memory, lens = self.forward_encoder(feats, src_key_padding_mask=src_key_padding_mask, return_lens=True)
+        memory_key_padding_mask = torch.arange(memory.shape[0], device=memory.device) >= lens[:, None]
+        logits = self.forward_decoder(tgt, memory, memory_key_padding_mask=memory_key_padding_mask, tgt_key_padding_mask=tgt_key_padding_mask)
+        return logits  # (SeqLen, Batch, Classes)
 
+    def forward_encoder(self, feats, src_key_padding_mask=None, return_lens=False, **kwargs):
         src_embs = self.input_ff(feats)
         # (S, B, E)
         src_embs = self.positional_encoding(src_embs)
-        # (S, B, E)
-        tgt_embs = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
-        # (T, B, E)
-        # print(feats.shape, tgt.shape, src_embs.shape, tgt_embs.shape)
-        #src_embs = src_embs.permute(1, 0, 2)
-        # (T, B, E)
-        #tgt_embs = tgt_embs.permute(1, 0, 2)
-        # (S, B, E)
-        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt_embs.shape[0], device=tgt_embs.device)
-        # Transformer blocks - Out size = (sequence length, batch_size, num_tokens)
-        #print(src_embs.shape, tgt_embs.shape, src_key_padding_mask.shape, tgt_key_padding_mask.shape, tgt_mask.shape)
-        embs = self.transformer(src_embs, tgt_embs,
-                                tgt_mask=tgt_mask,
-                                src_key_padding_mask=src_key_padding_mask,
-                                memory_key_padding_mask=src_key_padding_mask,
-                                tgt_key_padding_mask=tgt_key_padding_mask)
-        embs = self.head(embs)
-        return embs  # (SeqLen, Batch, Classes)
-
-    def forward_encoder(self, feats, src_key_padding_mask=None, **kwargs):
-        src_embs = self.input_ff(feats)
-        # (S, B, E)
-        src_embs = self.positional_encoding(src_embs)
-        memory = self.transformer.encoder(src_embs, src_key_padding_mask=src_key_padding_mask)
+        src_embs = src_embs.permute(1, 0, 2)
+        # (B, S, E)
+        lengths = feats.shape[0] - src_key_padding_mask.sum(dim=-1)
+        # (B,)
+        memory, lens = self.encoder(src_embs, lengths=lengths)
+        # (B, S, E)
+        memory = memory.permute(1, 0, 2)
+        if return_lens:
+            return memory, lens
         return memory
 
     def forward_decoder(self, tgt, memory, tgt_key_padding_mask=None, memory_key_padding_mask=None, **kwargs):
         tgt_embs = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
         tgt_embs = self.positional_encoding(tgt_embs)
-        tgt_mask = self.transformer.generate_square_subsequent_mask(tgt.shape[0], device=tgt.device)
+        tgt_mask = nn.Transformer.generate_square_subsequent_mask(tgt.shape[0], device=tgt.device)
         #print(tgt_embs.shape, memory.shape)
-        embs = self.transformer.decoder(tgt_embs, memory, tgt_mask=tgt_mask, memory_key_padding_mask=memory_key_padding_mask)
+        embs = self.decoder(tgt_embs,
+                            memory,
+                            tgt_mask=tgt_mask,
+                            memory_key_padding_mask=memory_key_padding_mask,
+                            tgt_key_padding_mask=tgt_key_padding_mask)
         return self.head(embs)

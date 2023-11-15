@@ -32,13 +32,14 @@ def get_uniq_slice():
 
 
 
-class FeatsIterableDataset(IterableDataset):
-    def __init__(self, feats_rspecifiers: List[str], targets_rspecifier=None, shuffle=False, bos_id=None, eos_id=None):
+class FeatsIterableDatasetV2(IterableDataset):
+    def __init__(self, feats_rspecifiers: List[str], targets_rspecifier=None, shuffle=False, bos_id=None, eos_id=None, batch_first=False):
         self.feats_rspecifiers = feats_rspecifiers
         self.targets_rspecifier = targets_rspecifier
         self.shuffle = shuffle
-        self.bos_id = bos_id
-        self.eos_id = eos_id
+        self.bos_id = torch.as_tensor([bos_id], dtype=torch.long)
+        self.eos_id = torch.as_tensor([eos_id], dtype=torch.long)
+        self.batch_first = batch_first
         if targets_rspecifier is not None:
             logging.info(f"Loading targets from {targets_rspecifier}")
             with ReadHelper(self.targets_rspecifier) as f:
@@ -48,6 +49,15 @@ class FeatsIterableDataset(IterableDataset):
 
     def __len__(self):
         return len(self.utt2target)
+
+    def get_targets(self, uid):
+        targets = self.utt2target.get(uid)
+        if self.bos_id is not None:
+            targets = torch.concatenate([self.bos_id, targets])
+        if self.eos_id is not None:
+            targets = torch.concatenate([targets, self.eos_id])
+        return targets
+
 
     def items(self):
         #rspecs = self.feats_rspecifiers[info.id: len(self.feats_rspecifiers): info.num_workers]
@@ -59,7 +69,7 @@ class FeatsIterableDataset(IterableDataset):
             with ReadHelper(rspec) as f:
                 for uid, feats in f:
                     if self.utt2target is not None:
-                        targets = self.utt2target.get(uid)
+                        targets = self.get_targets(uid)
                         tgt_key_padding_mask = torch.zeros(targets.shape[0])
                         targets_len = targets.shape[0]
                     else:
@@ -79,26 +89,32 @@ class FeatsIterableDataset(IterableDataset):
     def __iter__(self):
         return iter(self.items())
 
-    def collate(self, batch):
+    def collate_pad(self, batch):
         collated_batch = dict()
         collated_batch['uids'] = [e['uid'] for e in batch]
         collated_batch['feats'] = torch.nn.utils.rnn.pad_sequence([e['feats'] for e in batch],
-                                                batch_first=False,
+                                                batch_first=self.batch_first,
                                                 padding_value=1.0)
-        collated_batch['feats_len'] = torch.as_tensor([e['feats_len'] for e in batch], dtype=torch.long)
+        #collated_batch['feats_len'] = torch.as_tensor([e['feats_len'] for e in batch], dtype=torch.long)
         collated_batch['src_key_padding_mask'] = torch.nn.utils.rnn.pad_sequence([e['src_key_padding_mask'] for e in batch],
                                                                batch_first=True,
                                                                padding_value=True)
         if batch[0]['targets'] is not None:
-            collated_batch['targets'] = torch.concatenate([e['targets'] for e in batch]) # (SumTime,)
+            collated_batch['targets'] = torch.nn.utils.rnn.pad_sequence([e['targets'] for e in batch],
+                                                        batch_first=self.batch_first,
+                                                        padding_value=0)
+
+            #collated_batch['targets'] = torch.concatenate([e['targets'] for e in batch]) # (SumTime,)
             collated_batch['tgt_key_padding_mask'] = torch.nn.utils.rnn.pad_sequence(
                                                 [e['tgt_key_padding_mask'] for e in batch],
                                                 batch_first=True,
                                                 padding_value=True)
-            collated_batch['targets_len'] = torch.as_tensor([e['targets_len'] for e in batch], dtype=torch.long)
+            #collated_batch['targets_len'] = torch.as_tensor([e['targets_len'] for e in batch], dtype=torch.long)
         else:
             collated_batch['targets'] = None
             collated_batch['tgt_key_padding_mask'] = None
-            collated_batch['targets_len'] = None
+            #collated_batch['targets_len'] = None
         return collated_batch
+
+
 
